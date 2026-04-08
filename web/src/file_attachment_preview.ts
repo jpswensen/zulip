@@ -1,6 +1,7 @@
 import hljs from "highlight.js/lib/common";
 import matlab from "highlight.js/lib/languages/matlab";
 import $ from "jquery";
+import {GlobalWorkerOptions, getDocument} from "pdfjs-dist";
 
 import render_file_attachment_preview from "../templates/file_attachment_preview.hbs";
 
@@ -12,6 +13,12 @@ import * as overlays from "./overlays.ts";
 import {user_settings} from "./user_settings.ts";
 
 hljs.registerLanguage("matlab", matlab);
+
+// Configure pdf.js worker — webpack handles URL resolution via import.meta.url
+GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.min.mjs",
+    import.meta.url,
+).href;
 
 // Map file extensions to highlight.js language names.
 // Extensions not listed here will use highlightAuto().
@@ -217,7 +224,7 @@ function render_csv_table(text: string): string {
         return `<pre><code>${escape_html(text)}</code></pre>`;
     }
 
-    const header = rows[0];
+    const header = rows[0]!;
     const body_rows = rows.slice(1);
 
     let html = '<div class="file-preview-csv-wrapper"><table class="file-preview-csv-table"><thead><tr>';
@@ -236,17 +243,128 @@ function render_csv_table(text: string): string {
     return html;
 }
 
-function show_pdf(url: string): void {
+// PDF state for multi-page navigation
+let pdf_state: {
+    total_pages: number;
+    current_page: number;
+    url: string;
+    scale: number;
+} | null = null;
+
+async function render_pdf_page(page_number: number): Promise<void> {
+    if (!pdf_state) {
+        return;
+    }
     const $overlay = $(`#${CSS.escape(OVERLAY_NAME)}-overlay`);
     const $rendered = $overlay.find(".file-preview-rendered");
-    // Use the original URL (not the download URL) so the browser
-    // renders the PDF inline instead of triggering a download.
-    $rendered.html(
-        `<iframe class="file-preview-pdf-frame" src="${encodeURI(url)}" title="PDF preview"></iframe>`,
-    );
-    $overlay.find(".file-preview-loading").removeClass("show");
-    $rendered.addClass("show");
-    $overlay.find(".file-preview-error").removeClass("show");
+
+    try {
+        const pdf = await getDocument(pdf_state.url).promise;
+        const page = await pdf.getPage(page_number);
+
+        // Calculate scale to fit the container width
+        const $container = $rendered.find(".file-preview-pdf-container");
+        const container_width = Math.max($container.width() ?? 800, 400);
+        const viewport_unscaled = page.getViewport({scale: 1});
+        const fit_scale = (container_width - 40) / viewport_unscaled.width;
+        // Apply user zoom and device pixel ratio for crisp rendering
+        const dpr = window.devicePixelRatio || 1;
+        const scale = Math.min(fit_scale, 2.0) * pdf_state.scale * dpr;
+        const viewport = page.getViewport({scale});
+
+        const canvas = $rendered.find<HTMLCanvasElement>(".file-preview-pdf-canvas")[0]!;
+
+        // Set canvas pixel dimensions to the scaled viewport
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        // Set CSS dimensions to display at the logical (non-DPR) size
+        canvas.style.width = `${Math.floor(viewport.width / dpr)}px`;
+        canvas.style.height = `${Math.floor(viewport.height / dpr)}px`;
+
+        await page.render({canvas, viewport}).promise;
+
+        // Update page indicator
+        pdf_state.current_page = page_number;
+        $rendered
+            .find(".file-preview-pdf-page-indicator")
+            .text(`${page_number} / ${pdf_state.total_pages}`);
+
+        // Update button states
+        $rendered
+            .find(".file-preview-pdf-prev")
+            .prop("disabled", page_number <= 1);
+        $rendered
+            .find(".file-preview-pdf-next")
+            .prop("disabled", page_number >= pdf_state.total_pages);
+
+        pdf.destroy();
+    } catch (error) {
+        blueslip.warn("Error rendering PDF page", {error: String(error)});
+        show_error($t({defaultMessage: "An error occurred while rendering the PDF."}));
+    }
+}
+
+async function show_pdf(url: string): Promise<void> {
+    const $overlay = $(`#${CSS.escape(OVERLAY_NAME)}-overlay`);
+    const $rendered = $overlay.find(".file-preview-rendered");
+
+    try {
+        const pdf = await getDocument(url).promise;
+        const total_pages = pdf.numPages;
+
+        pdf_state = {
+            total_pages,
+            current_page: 1,
+            url,
+            scale: 1.0,
+        };
+
+        // Build PDF viewer UI with page navigation
+        let controls_html = "";
+        if (total_pages > 1) {
+            controls_html = `
+                <div class="file-preview-pdf-controls">
+                    <button class="file-preview-pdf-prev" disabled>&lsaquo;</button>
+                    <span class="file-preview-pdf-page-indicator">1 / ${total_pages}</span>
+                    <button class="file-preview-pdf-next" ${total_pages <= 1 ? "disabled" : ""}>&rsaquo;</button>
+                </div>`;
+        }
+
+        $rendered.html(
+            `<div class="file-preview-pdf-container">
+                ${controls_html}
+                <div class="file-preview-pdf-canvas-wrapper">
+                    <canvas class="file-preview-pdf-canvas"></canvas>
+                </div>
+            </div>`,
+        );
+
+        $overlay.find(".file-preview-loading").removeClass("show");
+        $rendered.addClass("show");
+        $overlay.find(".file-preview-error").removeClass("show");
+
+        // Render the first page directly using the already-loaded document
+        const page = await pdf.getPage(1);
+        const $container = $rendered.find(".file-preview-pdf-container");
+        const container_width = Math.max($container.width() ?? 800, 400);
+        const viewport_unscaled = page.getViewport({scale: 1});
+        const fit_scale = (container_width - 40) / viewport_unscaled.width;
+        const dpr = window.devicePixelRatio || 1;
+        const scale = Math.min(fit_scale, 2.0) * dpr;
+        const viewport = page.getViewport({scale});
+
+        const canvas = $rendered.find<HTMLCanvasElement>(".file-preview-pdf-canvas")[0]!;
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        canvas.style.width = `${Math.floor(viewport.width / dpr)}px`;
+        canvas.style.height = `${Math.floor(viewport.height / dpr)}px`;
+
+        await page.render({canvas, viewport}).promise;
+        pdf.destroy();
+    } catch (error) {
+        blueslip.warn("Error loading PDF", {error: String(error)});
+        show_error($t({defaultMessage: "Could not load PDF. The file may be corrupted."}));
+    }
 }
 
 function render_markdown_via_server(text: string): void {
@@ -321,14 +439,15 @@ export async function open_preview(url: string, filename: string): Promise<void>
             $overlay.find(".file-preview-rendered").empty().removeClass("show rendered-markdown");
             $overlay.find(".file-preview-loading").removeClass("show");
             $overlay.find(".file-preview-error").removeClass("show");
+            pdf_state = null;
         },
     });
 
     show_loading();
 
-    // PDF files use the browser's built-in viewer via iframe
+    // PDF files rendered via pdf.js (secure canvas rendering, no iframe)
     if (ext === "pdf") {
-        show_pdf(url);
+        await show_pdf(url);
         return;
     }
 
@@ -402,5 +521,20 @@ export function initialize(): void {
 
     $overlay.on("click", ".file-preview-error-download", function () {
         this.blur();
+    });
+
+    // PDF page navigation handlers
+    $overlay.on("click", ".file-preview-pdf-prev", (e) => {
+        e.preventDefault();
+        if (pdf_state && pdf_state.current_page > 1) {
+            void render_pdf_page(pdf_state.current_page - 1);
+        }
+    });
+
+    $overlay.on("click", ".file-preview-pdf-next", (e) => {
+        e.preventDefault();
+        if (pdf_state && pdf_state.current_page < pdf_state.total_pages) {
+            void render_pdf_page(pdf_state.current_page + 1);
+        }
     });
 }
