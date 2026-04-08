@@ -3,7 +3,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("zerver", "0792_fix_animated_emoji_still_images"),
+        ("zerver", "0800_cleanup_case_mismatched_legacy_apns_tokens"),
     ]
 
     operations = [
