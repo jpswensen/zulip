@@ -400,7 +400,7 @@ else:
     fcm_app = None
 
 
-def has_fcm_credentials() -> bool:  # nocoverage
+def has_fcm_credentials() -> bool:
     return fcm_app is not None
 
 
@@ -560,7 +560,14 @@ def uses_notification_bouncer() -> bool:
 
 
 def sends_notifications_directly() -> bool:
-    return has_apns_credentials() and has_fcm_credentials() and not uses_notification_bouncer()
+    # We send push notifications directly (rather than via the Zulip
+    # mobile push notification service) when the bouncer is disabled and
+    # we have credentials for at least one mobile platform.  Accepting
+    # either APNs or FCM alone -- rather than requiring both -- lets a
+    # self-hosted server deliver to just one platform through a
+    # custom-signed in-house app (e.g. an iOS-only build signed with the
+    # operator's own Apple developer account).
+    return not uses_notification_bouncer() and (has_apns_credentials() or has_fcm_credentials())
 
 
 def send_notifications_to_bouncer(
@@ -793,9 +800,10 @@ def push_notifications_configured() -> bool:
         # developers often work on just one platform at a time, so we should
         # only require one to be configured.
         return True
-    elif has_apns_credentials() and has_fcm_credentials():  # nocoverage
-        # We have the needed configuration to send through APNs and FCM directly
-        # (i.e., we are the bouncer, presumably.)  Again, assume it actually works.
+    elif sends_notifications_directly():  # nocoverage
+        # We have the needed configuration to send through APNs and/or FCM
+        # directly, bypassing the Zulip mobile push notification service.
+        # Again, assume it actually works.
         return True
     return False
 

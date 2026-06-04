@@ -41,10 +41,14 @@ from zerver.lib.push_notifications import (
     get_message_payload_gcm,
     get_mobile_push_content,
     handle_push_notification,
+    has_apns_credentials,
+    has_fcm_credentials,
     parse_fcm_options,
     send_android_push_notification_to_user,
     send_apple_push_notification,
     send_notifications_to_bouncer,
+    sends_notifications_directly,
+    uses_notification_bouncer,
 )
 from zerver.lib.remote_server import (
     PushNotificationBouncerError,
@@ -1272,6 +1276,47 @@ class PushBouncerNotificationTest(BouncerTestCase):
 
         remote_realm.refresh_from_db()
         self.assertEqual(remote_realm.last_request_datetime, time_sent)
+
+
+class DirectPushDeliveryTest(PushNotificationTestCase):
+    def test_sends_notifications_directly_with_either_platform(self) -> None:
+        # A self-hosted server delivers push notifications directly
+        # (bypassing the Zulip mobile push notification service) when the
+        # bouncer is disabled and it has credentials for *either* mobile
+        # platform; it need not configure both APNs and FCM.
+        fcm_app = "zerver.lib.push_notifications.fcm_app"
+
+        # Neither platform configured: not direct.
+        with self.settings(APNS_CERT_FILE=None), mock.patch(fcm_app, None):
+            self.assertFalse(has_apns_credentials())
+            self.assertFalse(has_fcm_credentials())
+            self.assertFalse(sends_notifications_directly())
+
+        # APNs only (e.g. an iOS-only in-house app): direct.
+        with self.settings(APNS_CERT_FILE="/foo.pem"), mock.patch(fcm_app, None):
+            self.assertTrue(has_apns_credentials())
+            self.assertFalse(has_fcm_credentials())
+            self.assertTrue(sends_notifications_directly())
+
+        # FCM only (e.g. an Android-only in-house app): direct.
+        with self.settings(APNS_CERT_FILE=None), mock.patch(fcm_app, object()):
+            self.assertFalse(has_apns_credentials())
+            self.assertTrue(has_fcm_credentials())
+            self.assertTrue(sends_notifications_directly())
+
+        # Both platforms configured: direct.
+        with self.settings(APNS_CERT_FILE="/foo.pem"), mock.patch(fcm_app, object()):
+            self.assertTrue(sends_notifications_directly())
+
+        # Bouncer enabled: not direct, even with local credentials, since
+        # delivery is delegated to the Zulip mobile push notification service.
+        with (
+            self.settings(APNS_CERT_FILE="/foo.pem"),
+            mock.patch(fcm_app, object()),
+            activate_push_notification_service(),
+        ):
+            self.assertTrue(uses_notification_bouncer())
+            self.assertFalse(sends_notifications_directly())
 
 
 class TestAPNs(PushNotificationTestCase):
