@@ -854,6 +854,36 @@ SOCIAL_AUTH_SAML_SUPPORT_CONTACT = {
 ##
 # ZULIP_SERVICE_PUSH_NOTIFICATIONS = True
 
+## Alternatively, a self-hosted server can deliver APNs (iOS) and/or FCM
+## (Android) push notifications *directly* to a custom-signed mobile app
+## that you build and distribute yourself, bypassing the Zulip mobile
+## push notification service.  This is an advanced configuration that
+## requires your own Apple/Google developer credentials and a custom
+## mobile build.  For complete documentation, see:
+##
+##   https://zulip.readthedocs.io/en/stable/production/mobile-push-direct.html
+##
+## It requires (1) leaving ZULIP_SERVICE_PUSH_NOTIFICATIONS unset, (2)
+## your own credentials below, and (3) a custom mobile build that
+## registers via the legacy /json/users/me/apns_device_token (or
+## /android_gcm_reg_id) endpoint.  Configure only the platform(s) you
+## actually ship to; a custom-signed client can detect this mode via the
+## push_notifications_direct flag on /server_settings.
+##
+## Apple Push Notification service (APNs), token-based auth (recommended):
+# APNS_TOKEN_KEY_FILE = "/etc/zulip/apns/AuthKey_ABCDE12345.p8"
+# APNS_TOKEN_KEY_ID = "ABCDE12345"   # the key's 10-character Key ID
+# APNS_TEAM_ID = "TEAMID1234"        # your Apple Developer Team ID
+## ...or certificate-based auth (legacy), in place of the three above:
+# APNS_CERT_FILE = "/etc/zulip/apns/cert.pem"
+## Set APNS_SANDBOX False for production (App Store/TestFlight/Ad Hoc)
+## builds; True targets Apple's sandbox gateway, which only Xcode debug
+## builds register against.  The default is True.
+# APNS_SANDBOX = False
+##
+## Firebase Cloud Messaging (FCM), for a custom Android app:
+# ANDROID_FCM_CREDENTIALS_PATH = "/etc/zulip/fcm-service-account.json"
+
 ## By default, a Zulip server that has registered for Zulip services
 ## submits both basic metadata (required for billing and for determining
 ## free plan eligibility), as well as aggregate usage statistics. You
