@@ -57,7 +57,10 @@ from zerver.lib.exceptions import (
     UserDeactivatedError,
 )
 from zerver.lib.mobile_auth_otp import otp_encrypt_api_key
-from zerver.lib.push_notifications import push_notifications_configured
+from zerver.lib.push_notifications import (
+    push_notifications_configured,
+    sends_notifications_directly,
+)
 from zerver.lib.pysa import mark_sanitized
 from zerver.lib.rate_limiter import readable_expiry_string_for_html
 from zerver.lib.realm_icon import realm_icon_url
@@ -1215,6 +1218,15 @@ def api_get_server_settings(request: HttpRequest) -> HttpResponse:
         zulip_merge_base=ZULIP_MERGE_BASE,
         zulip_feature_level=API_FEATURE_LEVEL,
         push_notifications_enabled=push_notifications_configured(),
+        # Lets a self-hosted-aware mobile client (e.g. a custom-signed
+        # in-house build) detect that this server delivers APNs/FCM push
+        # notifications directly rather than via the Zulip mobile push
+        # notification service.  In that mode the client must register its
+        # device token through the legacy `/json/users/me/apns_device_token`
+        # (or `/json/users/me/android_gcm_reg_id`) endpoint, since the
+        # bouncer-based `register_push_device` flow is unavailable without a
+        # bouncer.
+        push_notifications_direct=sends_notifications_directly(),
         is_incompatible=check_server_incompatibility(request),
     )
     context = zulip_default_context(request)
